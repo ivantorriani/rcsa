@@ -55,6 +55,12 @@ Other things measured from the clips, which the parameters are built around:
 | Detection | `detect.py` | `detections.json` |
 | 3D boxes | `lift_boxes.py` | `plants.json` |
 | Viewer | `viewer.py` | `results/field/<crop>_cam<n>.html` |
+| Top-down figure | `render_topdown.py` | `field_topdown.png` |
+
+`render_topdown.py` is a side tool rather than a pipeline stage. It collapses the
+cloud to a plan view by averaging the video colours of every point that lands in
+each output pixel — useful for checking at a glance whether the rows came out
+straight and how many plants detection missed.
 
 All intermediates live in `work/<crop>/cam<n>/` (git-ignored, as is
 `original_footage/`).
