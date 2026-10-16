@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VLM Baseline — RCSA</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<nav>
+  <a href="index.html">Overview</a>
+  <a href="reconstruction.html">3D Reconstruction</a>
+  <a href="vlm.html">VLM Baseline</a>
+</nav>
+
+<h1>VLM Baseline</h1>
+
+<h2>The task</h2>
+
+<p>This track asks a simpler question than the reconstruction work: shown a
+single frame of a crop row, can a vision-language model name the crop and judge
+its growth stage? Three models were given an identical set of 72 frames and an
+identical prompt, then scored against each other. The point was to establish
+what off-the-shelf models already manage before any training is attempted.</p>
+
+<p>Every model ran locally on an Apple M4, which rules out the largest models
+and makes speed a real criterion rather than an afterthought. Crop type has free
+ground truth, because each source clip contains exactly one crop and the
+filename records it. Growth stage has no ground truth at all, which turned out
+to be the more interesting half of the result.</p>
+
+<h2>Libraries used</h2>
+
+<div class="scroll">
+<table>
+<tr><th>Library</th><th>What it does</th><th>Why it, and not the alternative</th></tr>
+
+<tr>
+<td>MLX and mlx-vlm</td>
+<td>Runs vision-language models directly on the M4's GPU.</td>
+<td>Chosen over PyTorch, whose Apple backend is slower for this workload and
+lacks quantised builds of these particular models. MLX is Apple's own framework
+and targets this hardware specifically.</td>
+</tr>
+
+<tr>
+<td>Hugging Face Hub</td>
+<td>Fetches the three model checkpoints and caches them locally.</td>
+<td>Chosen over vendoring weights by hand because the models are distributed
+there anyway, and the cache makes repeat runs free.</td>
+</tr>
+
+<tr>
+<td>FFmpeg</td>
+<td>Samples frames out of the source clips at a fixed interval.</td>
+<td>Chosen over OpenCV here because this track needs nothing but decoding, and
+FFmpeg handles the odd MJPEG files without fuss.</td>
+</tr>
+
+<tr>
+<td>Pillow</td>
+<td>Draws each model's verdict onto the frames to produce review footage.</td>
+<td>Chosen over matplotlib because the output is a composited image rather than
+a plot, which is Pillow's job and not matplotlib's.</td>
+</tr>
+</table>
+</div>
+
+<h2>The pipeline</h2>
+
+<figure>
+<svg viewBox="0 0 660 300" xmlns="http://www.w3.org/2000/svg" role="img"
+     aria-label="Pipeline diagram: clips feed frame extraction, which produces a
+     manifest consumed by the model runner, whose results feed both a summary
+     and annotated review footage.">
+  <defs>
+    <marker id="b" markerWidth="8" markerHeight="8" refX="7" refY="3"
+            orient="auto"><path d="M0,0 L7,3 L0,6 z" fill="#1a1a1a"/></marker>
+  </defs>
+  <g font-family="Times New Roman, Times, serif" fill="#1a1a1a">
+    <g stroke="#1a1a1a" stroke-width="1" fill="none" marker-end="url(#b)">
+      <path d="M330,52 L330,76"/>
+      <path d="M330,124 L330,148"/>
+      <path d="M330,196 L330,214 L180,214 L180,238"/>
+      <path d="M330,196 L330,214 L490,214 L490,238"/>
+    </g>
+    <g fill="none" stroke="#1a1a1a" stroke-width="1">
+      <rect x="235" y="8"   width="190" height="44"/>
+      <rect x="235" y="80"  width="190" height="44"/>
+      <rect x="235" y="152" width="190" height="44"/>
+      <rect x="90"  y="242" width="180" height="44"/>
+      <rect x="400" y="242" width="180" height="44"/>
+    </g>
+    <g text-anchor="middle" font-size="13" font-weight="bold">
+      <text x="330" y="27">three field clips</text>
+      <text x="330" y="99">extract_frames.py</text>
+      <text x="330" y="171">run_vlm.py</text>
+      <text x="180" y="261">summarize.py</text>
+      <text x="490" y="261">make_footage.py</text>
+    </g>
+    <g text-anchor="middle" font-size="11">
+      <text x="330" y="43">cabbage, broccoli, pepper</text>
+      <text x="330" y="115">72 frames + manifest</text>
+      <text x="330" y="187">3 models &#215; 72 frames</text>
+      <text x="180" y="277">tables and agreement</text>
+      <text x="490" y="277">annotated review video</text>
+    </g>
+  </g>
+</svg>
+<figcaption>The manifest produced by frame extraction is the contract: every
+model reads the same rows, so results are directly comparable.</figcaption>
+</figure>
+
+<h2>Results</h2>
+
+<div class="scroll">
+<table>
+<tr><th>Model</th><th>Crop accuracy</th><th>Mean latency</th><th>Total run</th></tr>
+<tr><td>qwen3.5-4b</td><td>100%</td><td>4.75 s</td><td>5.7 min</td></tr>
+<tr><td>molmo2-8b</td><td>67%</td><td>32.16 s</td><td>38.6 min</td></tr>
+<tr><td>gemma4-e4b</td><td>65%</td><td>5.82 s</td><td>7.0 min</td></tr>
+</table>
+</div>
+
+<p>All three models returned valid, schema-conforming output on every one of the
+216 calls, so reliability was never the limitation. Qwen was both the fastest
+and the most accurate, running seven times quicker than Molmo for better
+results. On crop identification the task is evidently within reach of a
+four-billion-parameter model running on a laptop.</p>
+
+<p>Growth stage is where the picture falls apart. There is no ground truth, so
+the strongest available signal is whether independently trained models agree —
+and all three agree on the stage for only 2 of 72 frames. Molmo and Qwen agree
+on stage just 11% of the time, which is close to what random labelling would
+produce.</p>
+
+<h2>What the 3D work revealed</h2>
+
+<p>Every model called the pepper clips "tomato", and the manifest's ground truth
+recorded tomato as well, so Qwen scored a perfect 100%. The overhead camera used
+by the reconstruction track later settled it: the plants are unmistakably chili
+peppers. The ground truth was wrong, the models were wrong, and the benchmark
+quietly rewarded the error.</p>
+
+<p>This is the clearest argument for the reconstruction track. A ground-level
+camera buried in foliage sees red fruit on a bushy plant and tomato is a
+reasonable guess, whereas the view from directly above resolves the shape
+immediately. Perspective was doing more work than model choice.</p>
+
+<h2>Next steps</h2>
+
+<p>Stage assessment needs labels before it needs better models, because without
+ground truth there is no way to tell a good answer from a confident one. The
+frames where the three models disagree are the ones worth labelling first, since
+they mark exactly where the task is hard. Correcting the pepper mislabel in the
+manifest is the immediate fix.</p>
+
+<p>Beyond that, the two tracks should converge. A stage judgement is far more
+useful attached to a specific plant at a known position than to an anonymous
+frame, which is precisely what the reconstruction produces. Feeding each
+detected plant's cropped image to a VLM, rather than a whole frame, would give
+per-plant ripeness on a field map the AMIGA can act on.</p>
+
+<p class="back"><a href="index.html">&#8592; Back to overview</a></p>
+
+</body>
+</html>

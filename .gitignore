@@ -3,3 +3,20 @@
 .env.local
 node_modules/
 __pycache__/
+
+# VLM baseline
+.venv/
+data/frames/
+results/
+
+# Raw multi-camera rig footage (large, kept out of git)
+original_footage/
+
+# 3D pipeline
+.venv-3d/
+work/
+
+# model weights auto-downloaded by ultralytics
+*.pt
+*.ts
+mobileclip_blt.ts

@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RCSA — Robotic Crop Stage Assessment</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<h1>RCSA — Robotic Crop Stage Assessment</h1>
+
+<p>This project asks whether an autonomous field robot can decide, on its own,
+which crops are ready to harvest. The platform is a farm-ng AMIGA carrying a
+rig of three cameras, driven down rows of cabbage, broccoli and peppers. The
+work is split into two tracks, each attacking a different half of that question.</p>
+
+<p>The first track asks what a crop <em>is</em> and what stage it has reached,
+treating each video frame as an isolated image for a vision-language model to
+judge. The second track asks where each plant <em>sits in space</em> and how big
+it is, rebuilding the field as 3D geometry with one bounding box per plant.
+Harvestability needs both: a ripeness judgement, and a physical location the
+machine can act on.</p>
+
+<p>Neither track is finished, and both are documented here with their real
+numbers rather than their best ones. The pages below cover what was built, which
+libraries were chosen and why, and what each approach cannot yet do.</p>
+
+<h2>Pages</h2>
+
+<ul>
+  <li><a href="reconstruction.html"><strong>3D Reconstruction</strong></a> —
+      turning three-camera rig footage into an interactive 3D field of per-plant
+      bounding boxes.</li>
+  <li><a href="vlm.html"><strong>VLM Baseline</strong></a> —
+      benchmarking three vision-language models on identifying crop type and
+      growth stage from single frames.</li>
+</ul>
+
+<h2>The footage</h2>
+
+<p>Every result here comes from the same source: three synchronized clips per
+crop, captured by the AMIGA at 640&times;480 and 15 frames per second. Two
+cameras sit at ground level inside the canopy facing roughly opposite
+directions, and a third looks straight down at the bed. That arrangement turns
+out to shape the entire engineering problem, for reasons the reconstruction page
+explains.</p>
+
+</body>
+</html>

@@ -1,0 +1,82 @@
+You are assessing a single overhead photograph of a crop row, taken by a camera
+mounted on a field robot looking straight down at the plants.
+
+Answer about the MAIN crop plant visible in the image.
+
+--------------------------------------------------------------------------
+STEP 1 - Look at the CENTRE of the plant. Is a harvestable head actually there?
+
+Be strict. A head is only present if you can see a distinct, dense structure
+that is clearly different in texture from the surrounding leaves. Overlapping
+leaves alone are NOT a head. Leaves that merely converge toward the middle are
+NOT a head. If you are unsure, the answer is no.
+
+Most plants in these images have NO head yet. Do not expect one, and do not
+infer one from the fact that a crop is planted there.
+
+--------------------------------------------------------------------------
+STEP 2 - Identify the crop.
+
+If a head IS visible, it is decisive:
+  broccoli head - GRANULAR. A dome of hundreds of tiny tight flower buds, a
+                  beaded or pebbled surface, deep blue-green. Sits low, nested
+                  in the centre on a thick stalk.
+  cabbage head  - SMOOTH. A solid ball of broad overlapping leaf layers, with
+                  continuous leaf surfaces and visible veins running over it.
+                  No beads, no granularity.
+
+If NO head is visible - which is the usual case - decide from the LEAVES alone.
+The leaves are reliable on their own:
+
+  broccoli leaves  - OBLONG and held on a clear stalk (petiole), so each leaf
+                     stands away from the centre. Margins strongly WAVY and
+                     undulating, often with small lobes near the leaf base.
+                     Thick pale midrib. The rosette is OPEN and upright: you can
+                     see gaps, soil, and the central stem between the leaves.
+  cabbage leaves   - ROUNDED and broad, attached close to the base with little
+                     or no stalk. Margins comparatively SMOOTH. The leaves CUP
+                     and SPOON INWARD, curving up and over toward the middle, so
+                     the rosette is CLOSED and hugs the ground. Little or no
+                     soil visible at the centre.
+
+  The single most reliable cue with no head present: cabbage leaves curve INWARD
+  and hide the centre; broccoli leaves arch OUTWARD and leave the centre open.
+
+Both are blue-green and waxy, so COLOUR DOES NOT SEPARATE THEM. Do not use it.
+
+Other options: pepper (blocky lobed fruit, upright bushy plant, glossy dark
+leaves), tomato (round or pear-shaped fruit, green ripening to orange/red, on a
+sprawling vine), other (a crop plant, none of the above), none (no crop plant
+clearly visible - only soil, machinery, or blur).
+
+--------------------------------------------------------------------------
+STEP 3 - Growth stage.
+
+  early   - seedling or young plant, no harvestable organ forming. Mostly small
+            leaves, bare soil clearly visible between plants.
+  middle  - actively growing. The harvestable organ has begun to form but is
+            undersized, immature in colour, or still loose. Not yet pickable.
+            A plant with NO head yet but well-developed leaves is middle.
+  harvest - ready to pick NOW:
+              broccoli - head at full diameter, beads still tight and closed
+                         (once buds open into yellow flowers it is OVERMATURE)
+              cabbage  - head firm, solid and dense, leaves wrapped tightly
+              pepper   - fruit full size and firm, at its final colour
+              tomato   - fruit full size, turned orange/red
+
+  If you answered "no head" in STEP 1, the stage CANNOT be harvest for broccoli
+  or cabbage. A plant with no head is early or middle.
+
+--------------------------------------------------------------------------
+Judge ONLY what is visible in this image. Do not guess from what crops usually
+look like at this time of year. Your rationale must cite a feature you actually
+see; do not cite a head unless you answered true in STEP 1.
+
+Respond with a single JSON object and NOTHING else - no explanation before or
+after, no markdown code fences:
+
+{"head_visible": <true|false>,
+ "crop_type": "<pepper|tomato|broccoli|cabbage|other|none>",
+ "stage": "<early|middle|harvest>",
+ "confidence": <number between 0.0 and 1.0>,
+ "rationale": "<one short sentence citing what you actually see>"}

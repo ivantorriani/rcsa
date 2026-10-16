@@ -1,0 +1,116 @@
+/* Times New Roman, 12pt, 1.5in margins, cream background.
+   Headings and subheadings are the same size and face; the only thing that
+   separates them is weight. */
+
+:root {
+  --cream: #fdfbf3;
+  --ink: #1a1a1a;
+  --rule: #c9c2ad;
+}
+
+html {
+  background: var(--cream);
+}
+
+body {
+  font-family: "Times New Roman", Times, serif;
+  font-size: 12pt;
+  line-height: 1.5;
+  color: var(--ink);
+  background: var(--cream);
+  margin: 1.5in;
+  max-width: 6.5in;
+}
+
+/* Every heading level is 12pt Times. Headings are bold, subheadings are not. */
+h1, h2, h3, h4 {
+  font-family: "Times New Roman", Times, serif;
+  font-size: 12pt;
+  line-height: 1.5;
+  margin: 1.5em 0 0.5em;
+}
+
+h1, h2 { font-weight: bold; }
+h3, h4 { font-weight: normal; }
+
+h1 { margin-top: 0; }
+
+p {
+  margin: 0 0 1em;
+}
+
+a {
+  color: var(--ink);
+}
+
+nav {
+  margin-bottom: 2em;
+  padding-bottom: 0.5em;
+  border-bottom: 1px solid var(--rule);
+}
+
+nav a {
+  margin-right: 1.5em;
+}
+
+.back {
+  margin-top: 3em;
+  padding-top: 0.5em;
+  border-top: 1px solid var(--rule);
+}
+
+ul, ol {
+  margin: 0 0 1em;
+  padding-left: 1.5em;
+}
+
+li {
+  margin-bottom: 0.5em;
+}
+
+figure {
+  margin: 1.5em 0;
+}
+
+img, svg {
+  max-width: 100%;
+  height: auto;
+}
+
+figcaption {
+  margin-top: 0.5em;
+}
+
+table {
+  border-collapse: collapse;
+  margin: 1em 0;
+  width: 100%;
+}
+
+th, td {
+  text-align: left;
+  padding: 0.3em 0.8em 0.3em 0;
+  border-bottom: 1px solid var(--rule);
+  vertical-align: top;
+}
+
+th {
+  font-weight: bold;
+}
+
+code {
+  font-family: "Courier New", Courier, monospace;
+  font-size: 11pt;
+}
+
+/* Wide content scrolls inside itself rather than pushing the page sideways. */
+.scroll {
+  overflow-x: auto;
+}
+
+@media (max-width: 8in) {
+  body {
+    margin: 1em;
+    max-width: none;
+  }
+}

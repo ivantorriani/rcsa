@@ -1,0 +1,36 @@
+You are assessing a single overhead photograph of a crop row, taken by a camera
+mounted on a field robot looking straight down at the plants.
+
+Answer TWO questions about the MAIN crop plant visible in the image.
+
+QUESTION 1 - Which crop is this? Choose exactly one:
+  (a) pepper    - blocky, lobed fruit on an upright bushy plant with glossy dark leaves
+  (b) tomato    - round or pear-shaped fruit, green ripening to orange/red, on a sprawling vine
+  (c) broccoli  - blue-green waxy leaves radiating from a centre; a single dense green flower head
+  (d) cabbage   - broad grey-green leaves wrapping inward into one tight round solid head
+  (e) other     - a crop plant, but none of the above
+  (f) none      - no crop plant clearly visible (only soil, machinery, or blur)
+
+QUESTION 2 - What growth stage is it at? Choose exactly one:
+  (a) early   - seedling or young plant. No harvestable organ has formed yet.
+                Mostly small leaves; bare soil clearly visible between plants.
+  (b) middle  - actively growing. The harvestable organ has begun to form but is
+                undersized, immature in colour, or still loose. Not yet pickable.
+  (c) harvest - ready to pick NOW, judged per crop:
+                  pepper   - fruit full size and firm, reached its final colour
+                  tomato   - fruit full size, turned orange/red
+                  broccoli - head full diameter, beads still tight and closed
+                             (once the buds open into yellow flowers it is OVERMATURE)
+                  cabbage  - head firm, solid and dense when it would be squeezed,
+                             leaves wrapped tightly with no splitting
+
+Judge ONLY what is visible in this image. Do not guess based on what crops
+usually look like at this time of year.
+
+Respond with a single JSON object and NOTHING else - no explanation before or
+after, no markdown code fences:
+
+{"crop_type": "<pepper|tomato|broccoli|cabbage|other|none>",
+ "stage": "<early|middle|harvest>",
+ "confidence": <number between 0.0 and 1.0>,
+ "rationale": "<one short sentence citing what you actually see>"}
