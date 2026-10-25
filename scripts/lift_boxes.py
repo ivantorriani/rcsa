@@ -87,55 +87,88 @@ def main() -> None:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("crop")
     ap.add_argument("--cam", default="3")
+    ap.add_argument("--fused", action="store_true",
+                    help="cluster detections from every camera together in the "
+                         "fused frame. A plant seen from above and from the side "
+                         "becomes one plant whose height was actually observed "
+                         "rather than inferred from nadir depth relief.")
     ap.add_argument("--conf-floor", type=float, default=1.5,
                     help="VGGT depth confidence below which pixels are ignored")
     args = ap.parse_args()
 
-    cam_dir = WORK / args.crop / f"cam{args.cam}"
-    for required in ("frames.npz", "detections.json", "cloud.ply", "ground_model.json"):
-        if not (cam_dir / required).exists():
-            raise SystemExit(f"missing {cam_dir / required}; run the earlier stages first")
+    if args.fused:
+        cam_dir = WORK / args.crop / "fused"
+        for required in ("cloud.ply", "ground_model.json"):
+            if not (cam_dir / required).exists():
+                raise SystemExit(f"missing {cam_dir / required}; run fuse.py then "
+                                 f"flatten.py --fused first")
+    else:
+        cam_dir = WORK / args.crop / f"cam{args.cam}"
+        for required in ("frames.npz", "detections.json", "cloud.ply", "ground_model.json"):
+            if not (cam_dir / required).exists():
+                raise SystemExit(f"missing {cam_dir / required}; run the earlier stages first")
 
     import open3d as o3d
 
-    data = np.load(cam_dir / "frames.npz")
-    # Pull each array out once. Indexing `data["depth"][s]` inside the loop would
-    # re-decompress the whole stack on every single detection.
-    depths, confs = data["depth"], data["conf"]
-    intrinsics, extrinsics, transforms = (data["intrinsic"], data["extrinsic"],
-                                          data["T_window"])
-    kf_idx = list(data["keyframe_idx"])
-    rows = list(csv.DictReader((cam_dir / "keyframes.csv").open()))
-    # detections are keyed by keyframe filename; frames.npz by row position
-    name_of = {i: rows[i]["keyframe"] for i in kf_idx}
-    slot = {i: s for s, i in enumerate(kf_idx)}
-
-    dets_doc = json.loads((cam_dir / "detections.json").read_text())
-    frames = dets_doc["frames"]
+    # Which camera directories contribute detections, and which transform key
+    # carries their points into the frame the ground model is expressed in.
+    if args.fused:
+        sources = []
+        for npz in sorted(cam_dir.glob("frames_cam*.npz")):
+            cam = npz.stem.replace("frames_cam", "")
+            src_dir = WORK / args.crop / f"cam{cam}"
+            if (src_dir / "detections.json").exists():
+                sources.append((cam, npz, src_dir))
+            else:
+                print(f"  cam{cam}: no detections.json, skipping "
+                      f"(run detect.py --cam {cam})")
+        if not sources:
+            raise SystemExit("no camera has detections.json; run detect.py first")
+        t_key = "T_fused"
+    else:
+        sources = [(args.cam, cam_dir / "frames.npz", cam_dir)]
+        t_key = "T_window"
 
     # --- lift every detection independently ---------------------------------
-    blobs = []          # (centroid, points, score, keyframe index)
+    blobs = []          # (centroid, points, score, keyframe index, camera)
     skipped = 0
-    for i in kf_idx:
-        dets = frames.get(name_of[i]) or []
-        if not dets:
-            continue
-        s = slot[i]
-        depth = depths[s].astype(np.float32)
-        conf = confs[s].astype(np.float32)
-        K, E, T = intrinsics[s], extrinsics[s], transforms[s]
+    for cam, npz_path, src_dir in sources:
+        data = np.load(npz_path)
+        # Pull each array out once. Indexing `data["depth"][s]` inside the loop
+        # would re-decompress the whole stack on every single detection.
+        depths, confs = data["depth"], data["conf"]
+        intrinsics, extrinsics = data["intrinsic"], data["extrinsic"]
+        transforms = data[t_key]
+        kf_idx = list(data["keyframe_idx"])
+        rows = list(csv.DictReader((src_dir / "keyframes.csv").open()))
+        # detections are keyed by keyframe filename; frames.npz by row position
+        name_of = {i: rows[i]["keyframe"] for i in kf_idx}
+        slot = {i: s for s, i in enumerate(kf_idx)}
 
-        for det in dets:
-            poly = det.get("polygon")
-            if poly is None:
-                x1, y1, x2, y2 = det["bbox"]
-                poly = [[x1, y1], [x2, y1], [x2, y2], [x1, y2]]
-            pts = lift_detection(np.asarray(poly, dtype=float), depth, conf,
-                                 K, E, T, args.conf_floor)
-            if pts is None:
-                skipped += 1
+        frames = json.loads((src_dir / "detections.json").read_text())["frames"]
+        before = len(blobs)
+        for i in kf_idx:
+            dets = frames.get(name_of[i]) or []
+            if not dets:
                 continue
-            blobs.append((pts.mean(0), pts, float(det["score"]), i))
+            s = slot[i]
+            depth = depths[s].astype(np.float32)
+            conf = confs[s].astype(np.float32)
+            K, E, T = intrinsics[s], extrinsics[s], transforms[s]
+
+            for det in dets:
+                poly = det.get("polygon")
+                if poly is None:
+                    x1, y1, x2, y2 = det["bbox"]
+                    poly = [[x1, y1], [x2, y1], [x2, y2], [x1, y2]]
+                pts = lift_detection(np.asarray(poly, dtype=float), depth, conf,
+                                     K, E, T, args.conf_floor)
+                if pts is None:
+                    skipped += 1
+                    continue
+                blobs.append((pts.mean(0), pts, float(det["score"]), i, cam))
+        if len(sources) > 1:
+            print(f"  cam{cam}: {len(blobs) - before} detections lifted")
 
     if not blobs:
         raise SystemExit("no detections could be lifted -- check --conf-floor")
@@ -151,7 +184,7 @@ def main() -> None:
     # Cluster on the *corrected* centroids. Clustering in the bent frame would
     # merge plants that drift happened to push together and split ones it pulled
     # apart.
-    blobs = [(apply_model(b[0][None], model)[0], b[1], b[2], b[3]) for b in blobs]
+    blobs = [(apply_model(b[0][None], model)[0], b[1], b[2], b[3], b[4]) for b in blobs]
     centroids = np.stack([b[0] for b in blobs])
     cp = o3d.geometry.PointCloud()
     cp.points = o3d.utility.Vector3dVector(centroids.astype(np.float64))
@@ -178,6 +211,7 @@ def main() -> None:
             continue
 
         centre_local = (lo + hi) / 2
+        cams_seen = sorted({m[4] for m in members})
         plants.append({
             "id": len(plants),
             "centre_ground": centre_local.tolist(),
@@ -185,6 +219,12 @@ def main() -> None:
             "observations": len(members),
             "score": float(np.mean([m[2] for m in members])),
             "points": int(len(pts)),
+            # Which cameras contributed. A plant carrying a ground-level camera
+            # has a height that was seen in profile rather than inferred from
+            # nadir depth, which is the whole reason for the three-camera work --
+            # so the distinction is worth keeping per plant, not just in aggregate.
+            "cameras": cams_seen,
+            "side_observed": any(c != "3" for c in cams_seen),
         })
 
     out = {
@@ -206,6 +246,17 @@ def main() -> None:
               f"(along, across, height; unitless)")
         print(f"  seen in median {int(np.median(obs))} keyframes "
               f"(min {obs.min()}, max {obs.max()})")
+        fp = ext[:, :2].mean(1)
+        print(f"  height/footprint median {np.median(ext[:, 2] / fp):.3f}")
+        if args.fused:
+            side = np.array([p["side_observed"] for p in plants])
+            print(f"  {side.sum()} of {len(plants)} plants were seen by a "
+                  f"ground-level camera")
+            if side.any() and (~side).any():
+                print(f"    height/footprint, side-observed  : "
+                      f"{np.median(ext[side, 2] / fp[side]):.3f}")
+                print(f"    height/footprint, nadir only     : "
+                      f"{np.median(ext[~side, 2] / fp[~side]):.3f}")
     print(f"-> {path.relative_to(REPO)}")
 
 

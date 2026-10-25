@@ -27,6 +27,12 @@ RESULTS = REPO / "results" / "field"
 
 MAX_POINTS = 120_000     # browsers start to crawl past this
 BOX_COLOR = "#ff7043"
+# One colour per detecting camera, so the fused view shows at a glance which
+# part of the field each camera contributed. cam3 is the nadir camera and
+# covers the whole strip; the two ground cameras reach only as far as their
+# clips do.
+CAM_COLOR = {"3": "#4fc3f7", "1": "#ff7043", "2": "#ffd54f"}
+CAM_LABEL = {"3": "cam3 (nadir)", "1": "cam1 (ground)", "2": "cam2 (ground)"}
 
 
 def box_corners(centre: np.ndarray, extent: np.ndarray) -> np.ndarray:
@@ -49,6 +55,8 @@ def main() -> None:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("crop")
     ap.add_argument("--cam", default="3")
+    ap.add_argument("--fused", action="store_true",
+                    help="render the merged three-camera field")
     ap.add_argument("--max-points", type=int, default=MAX_POINTS)
     ap.add_argument("--no-cloud", action="store_true",
                     help="plant boxes only -- the cloud is noisy enough that the "
@@ -58,7 +66,7 @@ def main() -> None:
     import open3d as o3d
     import plotly.graph_objects as go
 
-    cam_dir = WORK / args.crop / f"cam{args.cam}"
+    cam_dir = (WORK / args.crop / "fused") if args.fused else (WORK / args.crop / f"cam{args.cam}")
     plants_doc = json.loads((cam_dir / "plants.json").read_text())
     plants = plants_doc["plants"]
 
@@ -89,11 +97,12 @@ def main() -> None:
 
     # One mesh for every box, merged into a single trace so the legend toggle
     # turns all of them on and off at once.
-    if plants:
+    def box_traces(subset, colour, label):
+        """Boxes, edges and hover points for one group of plants, as 3 traces."""
         vx, vy, vz, ti, tj, tk = [], [], [], [], [], []
         ex, ey, ez = [], [], []
         hx, hy, hz, htext = [], [], [], []
-        for p in plants:
+        for p in subset:
             c = np.array(p["centre_ground"])
             e = np.array(p["extent"])
             corners = box_corners(c, e)
@@ -106,27 +115,55 @@ def main() -> None:
                 ey.extend([corners[a, 1], corners[b, 1], None])
                 ez.extend([corners[a, 2], corners[b, 2], None])
             hx.append(c[0]); hy.append(c[1]); hz.append(c[2] + e[2] / 2)
+            seen = ", ".join(f"cam{c}" for c in sorted(map(str, p.get("cameras", []))))
+            fp = (e[0] + e[1]) / 2
             htext.append(
                 f"plant {p['id']}<br>"
                 f"extent {e[0]:.3f} x {e[1]:.3f} x {e[2]:.3f}<br>"
+                f"height/footprint {e[2] / fp:.2f}<br>"
+                f"seen by {seen or 'n/a'}<br>"
                 f"seen in {p['observations']} keyframes<br>"
                 f"score {p['score']:.2f}"
             )
-
+        if not vx:
+            return []
         # With the cloud hidden there is nothing to see through, so the boxes
         # carry the whole picture and can afford to be solid.
-        traces.append(go.Mesh3d(x=vx, y=vy, z=vz, i=ti, j=tj, k=tk,
-                                color=BOX_COLOR,
-                                opacity=0.55 if args.no_cloud else 0.18,
-                                name="plant boxes", showlegend=True,
-                                hoverinfo="skip"))
-        traces.append(go.Scatter3d(x=ex, y=ey, z=ez, mode="lines",
-                                   line=dict(color=BOX_COLOR, width=3),
-                                   name="box edges", hoverinfo="skip"))
-        traces.append(go.Scatter3d(x=hx, y=hy, z=hz, mode="markers",
-                                   marker=dict(size=4, color=BOX_COLOR),
-                                   text=htext, hoverinfo="text",
-                                   name="plant labels"))
+        return [
+            go.Mesh3d(x=vx, y=vy, z=vz, i=ti, j=tj, k=tk, color=colour,
+                      opacity=0.55 if args.no_cloud else 0.18,
+                      name=label, legendgroup=label, showlegend=True,
+                      hoverinfo="skip"),
+            go.Scatter3d(x=ex, y=ey, z=ez, mode="lines",
+                         line=dict(color=colour, width=3), name=label,
+                         legendgroup=label, showlegend=False, hoverinfo="skip"),
+            go.Scatter3d(x=hx, y=hy, z=hz, mode="markers",
+                         marker=dict(size=4, color=colour), text=htext,
+                         hoverinfo="text", name=label, legendgroup=label,
+                         showlegend=False),
+        ]
+
+    if plants:
+        if args.fused:
+            # Group by detecting camera. A plant the rig registered well enough
+            # to be seen twice gets its own group rather than being filed under
+            # either camera -- on this footage that is rare, and saying so in the
+            # legend is more honest than hiding it.
+            groups: dict[str, list] = {}
+            for p in plants:
+                cams = sorted(map(str, p.get("cameras", [])))
+                key = "+".join(cams) if len(cams) > 1 else (cams[0] if cams else "?")
+                groups.setdefault(key, []).append(p)
+            for key in sorted(groups, key=lambda k: (len(k), k)):
+                subset = groups[key]
+                colour = (CAM_COLOR.get(key) if len(key) == 1 else "#b388ff")
+                label = (CAM_LABEL.get(key, f"cam{key}") if len(key) == 1
+                         else f"seen by {key.replace('+', ' + cam').replace(key[0], 'cam' + key[0], 1)}")
+                traces.extend(box_traces(subset, colour or BOX_COLOR,
+                                         f"{label} — {len(subset)} plants"))
+        else:
+            traces.extend(box_traces(plants, BOX_COLOR,
+                                     f"plant boxes — {len(plants)}"))
 
     # The strip is roughly 10 long by 1.7 across by 0.9 tall. Drawn to true
     # proportions it renders as an unreadable sliver, so the two short axes are
@@ -150,7 +187,7 @@ def main() -> None:
 
     fig = go.Figure(data=traces)
     fig.update_layout(
-        title=(f"{args.crop} — cam{args.cam} — {len(plants)} plants "
+        title=(f"{args.crop} — {'all three cameras' if args.fused else f'cam{args.cam}'} — {len(plants)} plants "
                f"({'unitless' if plants_doc['unitless'] else 'scaled'})"),
         template="plotly_dark",
         scene=dict(
@@ -173,7 +210,8 @@ def main() -> None:
 
     RESULTS.mkdir(parents=True, exist_ok=True)
     suffix = "_boxes" if args.no_cloud else ""
-    out = RESULTS / f"{args.crop}_cam{args.cam}{suffix}.html"
+    label = "fused" if args.fused else f"cam{args.cam}"
+    out = RESULTS / f"{args.crop}_{label}{suffix}.html"
     fig.write_html(str(out), include_plotlyjs="inline")
     size_mb = out.stat().st_size / 1e6
     drawn = "boxes only" if args.no_cloud else f"{len(ground):,} points"

@@ -58,6 +58,15 @@ CONF_PERCENTILE = 80.0
 POINTS_PER_WINDOW = 60_000
 VOXEL = 0.004        # final downsample, in the reconstruction's own units
 
+# Alignment quality gates. The nadir camera never trips these -- its windows
+# always share plenty of well-conditioned overlap -- but a ground-level camera
+# driven through a canopy loses the thread, and when it does the old behaviour
+# was to print a warning and then keep composing onto the dead frame, emitting
+# the rest of the clip in a coordinate system that no longer meant anything.
+# Silence was the failure mode, so these turn it into a recorded segment break.
+MIN_ALIGN_INLIERS = 200   # robust_umeyama already bails below 50; this is the trust floor
+RESID_BREAK = 4.0         # multiple of the run's own median residual that counts as lost
+
 
 def umeyama(src: np.ndarray, dst: np.ndarray) -> tuple[float, np.ndarray, np.ndarray]:
     """Least-squares similarity transform mapping src onto dst (Umeyama 1991)."""
@@ -164,10 +173,13 @@ def main() -> None:
 
     cloud_xyz: list[np.ndarray] = []
     cloud_rgb: list[np.ndarray] = []
+    cloud_seg: list[np.ndarray] = []
     frames: dict[int, dict] = {}          # keyframe index -> pose/depth record
     prev_shared: dict[int, np.ndarray] = {}   # keyframe index -> world pts (prev window)
     T_global = np.eye(4)                  # window-local -> global
     s_global = 1.0
+    segment = 0                           # bumped whenever the track is lost
+    accepted_resid: list[float] = []      # residuals of alignments we believed
 
     t_start = time.perf_counter()
     for wi, idx in enumerate(wins):
@@ -207,20 +219,47 @@ def main() -> None:
                     sel = sel[np.random.choice(len(sel), 4000, replace=False)]
                 src.append(pts[j][sel[:, 0], sel[:, 1]])
                 dst.append(prev_shared[i][sel[:, 0], sel[:, 1]])
+            break_reason = None
             if src:
                 src = np.concatenate(src)
                 dst = np.concatenate(dst)
                 ok = np.isfinite(src).all(1) & np.isfinite(dst).all(1)
                 scale, R, t, resid, used = robust_umeyama(src[ok], dst[ok])
-                step = np.eye(4)
-                step[:3, :3] = scale * R
-                step[:3, 3] = t
-                T_global = T_global @ step
-                s_global *= scale
-                print(f"  window {wi:>3}: aligned on {len(shared)} shared frames, "
-                      f"{used} inliers, residual {resid:.4f}")
+
+                # Gate the alignment before trusting it. An alignment that fits
+                # badly is worse than no alignment at all: it carries the rest of
+                # the clip into a frame that is confidently wrong, and the cloud
+                # still looks like a cloud. Judged against the run's own accepted
+                # residuals rather than an absolute number, because the units are
+                # arbitrary and differ per camera.
+                if used < MIN_ALIGN_INLIERS:
+                    break_reason = f"only {used} inliers"
+                elif len(accepted_resid) >= 3 and resid > RESID_BREAK * np.median(accepted_resid):
+                    break_reason = (f"residual {resid:.4f} is "
+                                    f"{resid / np.median(accepted_resid):.1f}x the run median")
+
+                if break_reason is None:
+                    step = np.eye(4)
+                    step[:3, :3] = scale * R
+                    step[:3, 3] = t
+                    T_global = T_global @ step
+                    s_global *= scale
+                    accepted_resid.append(resid)
+                    print(f"  window {wi:>3}: aligned on {len(shared)} shared frames, "
+                          f"{used} inliers, residual {resid:.4f}")
             else:
-                print(f"  window {wi:>3}: NO shared frames -- track breaks here")
+                break_reason = "no shared frames"
+
+            if break_reason is not None:
+                # Start a new segment rather than composing onto a frame we no
+                # longer believe. Points and poses either side of this boundary
+                # are in different coordinate systems and must never be mixed.
+                segment += 1
+                T_global = np.eye(4)
+                s_global = 1.0
+                accepted_resid = []
+                print(f"  window {wi:>3}: TRACK BREAK ({break_reason}) "
+                      f"-- starting segment {segment}")
 
         # --- carry into the global frame ---------------------------------------
         A, b = T_global[:3, :3], T_global[:3, 3]
@@ -239,6 +278,7 @@ def main() -> None:
             sel = sel[np.random.choice(len(sel), POINTS_PER_WINDOW, replace=False)]
         cloud_xyz.append(world[sel[:, 0], sel[:, 1], sel[:, 2]])
         cloud_rgb.append(rgb[sel[:, 0], sel[:, 1], sel[:, 2]])
+        cloud_seg.append(np.full(len(sel), segment, dtype=np.int32))
 
         # --- per-keyframe record for the box-lifting stage ----------------------
         for j, i in enumerate(idx):
@@ -252,6 +292,8 @@ def main() -> None:
                 "depth": depth[j].astype(np.float16),
                 "conf": conf[j].astype(np.float16),
                 "T_window": T_global.astype(np.float32),
+                "segment": segment,
+                "scale_cum": s_global,
             }
 
         done = time.perf_counter() - t_start
@@ -260,6 +302,26 @@ def main() -> None:
 
     xyz = np.concatenate(cloud_xyz)
     rgb = np.clip(np.concatenate(cloud_rgb), 0, 1)
+    seg = np.concatenate(cloud_seg)
+
+    # One segment is the normal case and nothing changes. More than one means the
+    # track was lost, and the pieces are in mutually meaningless frames -- so keep
+    # the largest and say plainly what was dropped, rather than fusing nonsense.
+    if segment > 0:
+        sizes = {s: int((seg == s).sum()) for s in range(segment + 1)}
+        keep_seg = max(sizes, key=sizes.get)
+        kept_kf = sum(1 for f in frames.values() if f["segment"] == keep_seg)
+        print(f"\n!! track broke {segment} time(s); {segment + 1} segments: {sizes}")
+        print(f"!! keeping segment {keep_seg} only "
+              f"({sizes[keep_seg]:,} points, {kept_kf} of {len(frames)} keyframes).")
+        print(f"!! the other segments are in different coordinate frames and were "
+              f"dropped. Re-run with a smaller --window if this loses too much.")
+        m = seg == keep_seg
+        xyz, rgb = xyz[m], rgb[m]
+        frames = {i: f for i, f in frames.items() if f["segment"] == keep_seg}
+        if not frames:
+            raise SystemExit("no keyframes survived in the kept segment")
+
     print(f"\nraw cloud: {len(xyz):,} points")
 
     import open3d as o3d
@@ -281,6 +343,10 @@ def main() -> None:
         depth=np.stack([frames[i]["depth"] for i in sorted(frames)]),
         conf=np.stack([frames[i]["conf"] for i in sorted(frames)]),
         T_window=np.stack([frames[i]["T_window"] for i in sorted(frames)]),
+        # Cumulative scale was previously computed and thrown away. rig_solve.py
+        # needs it to put two cameras' arbitrary scales into one ratio.
+        scale_cum=np.array([frames[i]["scale_cum"] for i in sorted(frames)], dtype=np.float32),
+        segment=np.array([frames[i]["segment"] for i in sorted(frames)], dtype=np.int32),
     )
     print(f"-> {out_ply.relative_to(REPO)}")
     print(f"-> {(cam_dir / 'frames.npz').relative_to(REPO)}")

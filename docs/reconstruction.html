@@ -224,8 +224,19 @@ frame. Every pixel is an average of the video colours of the points that landed
 there, so dark areas are places nothing was reconstructed.</figcaption>
 </figure>
 
-<p><a href="demo/cabbage_cam3_boxes.html"><strong>Open the interactive demo
-&#8594;</strong></a> &nbsp;(plant boxes only, 5&nbsp;MB)</p>
+<p><a href="demo/cabbage_fused.html"><strong>Open the three-camera demo
+&#8594;</strong></a> &nbsp;(all cameras fused, 12&nbsp;MB)</p>
+
+<p>The legend groups plants by which camera detected them, and each group can be
+toggled on its own: cam3 (nadir) covers the whole strip, while cam1 and cam2 reach
+only as far into the row as their clips track. A dozen plants were registered
+closely enough to be seen by two cameras at once and get their own group. Hovering
+a box reports its height-to-footprint ratio, which is where the value of the ground
+cameras shows up &mdash; a median of 0.77 for plants a ground camera saw, against
+0.38 for plants only the overhead camera saw.</p>
+
+<p><a href="demo/cabbage_cam3_boxes.html">Open the earlier nadir-only demo
+&#8594;</a> &nbsp;(plant boxes only, 5&nbsp;MB)</p>
 
 <p><a href="demo/cabbage_cam3.html">Open the version with the point cloud
 &#8594;</a> &nbsp;(12&nbsp;MB, slower to load)</p>

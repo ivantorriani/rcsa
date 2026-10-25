@@ -33,13 +33,49 @@ WORK = REPO / "work"
 # Prompts are per crop. Phrasing matters more than it should with open-vocab
 # models, so these are deliberately concrete nouns rather than plant names:
 # "cabbage head" beats "cabbage", which drifts toward whole-plant foliage.
+# Prompts are per view, not just per crop. A plant from directly above is a
+# rosette seen as a disc; from ground level it is a profile with stems and leaf
+# undersides, and the same prompt does not describe both well.
 PROMPTS = {
-    "cabbage": ["cabbage head", "green leafy cabbage plant"],
-    "broccoli": ["broccoli head", "broccoli plant"],
+    "cabbage": {
+        "nadir":  ["cabbage head", "green leafy cabbage plant"],
+        "ground": ["cabbage head", "cabbage leaves", "leafy green plant"],
+    },
+    "broccoli": {
+        "nadir":  ["broccoli head", "broccoli plant"],
+        "ground": ["broccoli head", "broccoli stalk", "broccoli leaves"],
+    },
     # The nadir camera shows the fruit clearly, which is also what disambiguates
     # this crop -- the ground-level view reads as tomato to every VLM we ran.
-    "pepper": ["red chili pepper", "green chili pepper", "pepper plant"],
+    # Worth noting the ground cameras see *hanging fruit* far better than an
+    # overhead view does, so for pepper they are the stronger detector despite
+    # being the view that confuses the crop's identity.
+    "pepper": {
+        "nadir":  ["red chili pepper", "green chili pepper", "pepper plant"],
+        "ground": ["green chili pepper", "red chili pepper", "pepper fruit"],
+    },
 }
+
+
+def base_crop(crop: str) -> str:
+    """Strip a tier suffix: `cabbage_360` and `cabbage` are the same crop.
+
+    Work directories are sometimes split by reconstruction tier, because the
+    cheapest reconstruction is not always the worst one for a given purpose --
+    cam1's 360-keyframe run is a single unbroken 150 s segment where its
+    full-clip run broke track and left only 52 s, and the rig solve wants
+    duration far more than it wants points. The tier is a property of the
+    reconstruction, never of the crop, so prompts resolve to the base name.
+    """
+    return crop.split("_")[0]
+
+
+def prompts_for(crop: str, cam: str) -> list[str]:
+    """Nadir prompts for cam3, ground prompts for the side cameras."""
+    crop = base_crop(crop)
+    if crop not in PROMPTS:
+        raise SystemExit(f"no prompts defined for '{crop}'; add them to PROMPTS")
+    return PROMPTS[crop]["nadir" if str(cam) == "3" else "ground"]
 
 CONF = 0.10          # open-vocab scores run low; filtered properly at the 3D stage
 MIN_AREA_FRAC = 0.0008   # ignore specks that cannot carry a usable depth patch
@@ -86,9 +122,9 @@ def main() -> None:
     if args.limit:
         rows = rows[: args.limit]
 
-    prompts = PROMPTS.get(args.crop)
-    if prompts is None:
-        raise SystemExit(f"no prompts defined for '{args.crop}'; add them to PROMPTS")
+    prompts = prompts_for(args.crop, args.cam)
+    print(f"cam{args.cam} ({'nadir' if str(args.cam) == '3' else 'ground'} view): "
+          f"{prompts}")
 
     model, has_masks = load_model(prefer_seg=not args.boxes_only)
     if has_masks:
