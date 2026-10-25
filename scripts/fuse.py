@@ -237,20 +237,49 @@ def main() -> None:
     allsrc = np.concatenate(src)
     print(f"\nfused cloud before downsample: {len(allxyz):,} points")
 
+    # Downsample each camera separately and concatenate, rather than voxelising
+    # the merged cloud in one go. Open3D's voxel filter returns no index map, so
+    # a single pass would leave every surviving point anonymous -- and knowing
+    # which camera a point came from is the only way the viewer can show what the
+    # ground cameras actually contributed. Per-camera voxels keep that label
+    # exactly, at the cost of not deduplicating across cameras, which is the
+    # right trade here anyway: two cameras looking at the same plant from a side
+    # and from above did not reconstruct the same surface, so collapsing their
+    # points together would assert an agreement the registration has not earned.
+    kept_xyz, kept_rgb, kept_src = [], [], []
+    for c in np.unique(allsrc):
+        m = allsrc == c
+        sub = o3d.geometry.PointCloud()
+        sub.points = o3d.utility.Vector3dVector(allxyz[m].astype(np.float64))
+        sub.colors = o3d.utility.Vector3dVector(allrgb[m].astype(np.float64))
+        sub = sub.voxel_down_sample(VOXEL)
+        sub, _ = sub.remove_statistical_outlier(nb_neighbors=20, std_ratio=2.0)
+        q = np.asarray(sub.points)
+        kept_xyz.append(q)
+        kept_rgb.append(np.asarray(sub.colors))
+        kept_src.append(np.full(len(q), int(c), dtype=np.int32))
+        print(f"  cam{c}: {int(m.sum()):,} -> {len(q):,} points after filtering")
+
+    down_xyz = np.concatenate(kept_xyz)
+    down_rgb = np.concatenate(kept_rgb)
+    down_src = np.concatenate(kept_src)
+
     pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(allxyz.astype(np.float64))
-    pcd.colors = o3d.utility.Vector3dVector(allrgb.astype(np.float64))
-    pcd = pcd.voxel_down_sample(VOXEL)
-    pcd, _ = pcd.remove_statistical_outlier(nb_neighbors=20, std_ratio=2.0)
+    pcd.points = o3d.utility.Vector3dVector(down_xyz)
+    pcd.colors = o3d.utility.Vector3dVector(down_rgb)
     o3d.io.write_point_cloud(str(out_dir / "cloud.ply"), pcd)
     print(f"after voxel+outlier filter: {len(pcd.points):,} points")
 
-    np.save(out_dir / "source_cam.npy", allsrc)
+    # Aligned index-for-index with cloud.ply, and flatten.py transforms points
+    # in place without reordering, so it stays aligned with cloud_flat.ply too.
+    np.save(out_dir / "source_cam.npy", down_src)
     (out_dir / "manifest.json").write_text(json.dumps({
         "crop": args.crop, "ref_cam": ref,
         "cameras": sorted({int(s) for s in np.unique(allsrc)}),
-        "points_per_camera": {str(c): int((allsrc == c).sum())
-                              for c in np.unique(allsrc)},
+        "points_per_camera": {str(c): int((down_src == c).sum())
+                              for c in np.unique(down_src)},
+        "points_per_camera_raw": {str(c): int((allsrc == c).sum())
+                                  for c in np.unique(allsrc)},
         "baseline_refinement": report,
         "rig_status": rig.get("status"),
         "note": "merged in the rigid pre-flatten frame; run flatten.py on this",

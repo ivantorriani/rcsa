@@ -233,6 +233,13 @@ def main() -> None:
                     help="with --fused, build the soil model from this camera's "
                          "points only and apply it to all. The nadir camera is "
                          "usually the only one that reliably sees bare soil.")
+    ap.add_argument("--no-trim", dest="trim", action="store_false",
+                    help="keep points at every height, including the ground "
+                         "cameras' sub-soil sheet and overhead spikes")
+    ap.add_argument("--trim-below", type=float, default=-0.08,
+                    help="drop points this far below the fitted soil (unitless)")
+    ap.add_argument("--trim-above", type=float, default=0.40,
+                    help="drop points this far above the fitted soil (unitless)")
     args = ap.parse_args()
 
     import open3d as o3d
@@ -306,9 +313,46 @@ def main() -> None:
         after = np.percentile(straight[m, 2], 20)
         print(f"  segment {i}: {before:+.3f} -> {after:+.3f}")
 
+    # Trim the height band, which is only definable now. Before flattening,
+    # "half a metre above the soil" is not a statement you can make about a
+    # point -- the soil is a tilted, drifting surface. After it, height is a
+    # real coordinate and the two failure modes of monocular depth become
+    # separable from the crop.
+    #
+    # Both are ground-camera artefacts and both were measured on cabbage: cam1
+    # throws a spike to 0.63 at the start of its track, and cam1/cam2 put a
+    # sheet of points down to -0.2, which is depth error accumulating BEHIND
+    # the surface they were looking at. The nadir camera needs neither cut --
+    # its 99th percentile is 0.17 and its maximum 0.21 -- so this only ever
+    # removes points the ground cameras invented.
+    colours = np.asarray(cloud.colors)
+    keep = np.ones(len(straight), bool)
+    if args.trim:
+        keep = (straight[:, 2] >= args.trim_below) & (straight[:, 2] <= args.trim_above)
+        if (~keep).any():
+            print(f"trimming {int((~keep).sum()):,} of {len(keep):,} points "
+                  f"outside height [{args.trim_below:+.2f}, {args.trim_above:+.2f}]")
+            if args.fused and (cam_dir / "source_cam.npy").exists():
+                s_all = np.load(cam_dir / "source_cam.npy")
+                if len(s_all) == len(straight):
+                    for c in np.unique(s_all):
+                        cut = (~keep) & (s_all == c)
+                        print(f"    cam{c}: {int(cut.sum()):,} "
+                              f"({100 * cut.sum() / max(1, (s_all == c).sum()):.1f}% of its points)")
+        straight = straight[keep]
+        colours = colours[keep]
+
+    # Keep the per-point camera labels aligned with the cloud they describe.
+    # flatten.py is the only stage that changes the point count after fuse.py,
+    # so this is the only place the alignment can be lost.
+    if args.fused and (cam_dir / "source_cam.npy").exists():
+        s_all = np.load(cam_dir / "source_cam.npy")
+        if len(s_all) == len(keep):
+            np.save(cam_dir / "source_cam_flat.npy", s_all[keep])
+
     flat = o3d.geometry.PointCloud()
     flat.points = o3d.utility.Vector3dVector(straight)
-    flat.colors = cloud.colors
+    flat.colors = o3d.utility.Vector3dVector(colours)
     o3d.io.write_point_cloud(str(cam_dir / "cloud_flat.ply"), flat)
     (cam_dir / "ground_model.json").write_text(json.dumps(model, indent=1))
 

@@ -35,6 +35,11 @@ CAM_COLOR = {"3": "#4fc3f7", "1": "#ff7043", "2": "#ffd54f"}
 CAM_LABEL = {"3": "cam3 (nadir)", "1": "cam1 (ground)", "2": "cam2 (ground)"}
 
 
+def hex_to_rgb01(h: str):
+    h = h.lstrip("#")
+    return np.array([int(h[i:i + 2], 16) / 255 for i in (0, 2, 4)])
+
+
 def box_corners(centre: np.ndarray, extent: np.ndarray) -> np.ndarray:
     """Eight corners of an axis-aligned box in the ground frame."""
     h = extent / 2
@@ -81,19 +86,68 @@ def main() -> None:
         cloud = o3d.io.read_point_cloud(str(cam_dir / "cloud_flat.ply"))
         ground = np.asarray(cloud.points)
         rgb = np.asarray(cloud.colors)
+
+        # Which camera each point came from, when fuse.py recorded it. Without
+        # this the fused cloud is one undifferentiated trace and looks exactly
+        # like the single-camera one with extra clutter at one end -- there is
+        # no way to see what the ground cameras contributed, which is the only
+        # thing the fused view has to say.
+        # flatten.py trims the height band, so prefer the labels it wrote for
+        # the cloud that survived over the pre-trim ones.
+        src_path = cam_dir / "source_cam_flat.npy"
+        if not src_path.exists():
+            src_path = cam_dir / "source_cam.npy"
+        src = None
+        if args.fused and src_path.exists():
+            s_all = np.load(src_path)
+            if len(s_all) == len(ground):
+                src = s_all
+            else:
+                print(f"  note: source_cam.npy has {len(s_all):,} labels for "
+                      f"{len(ground):,} points; re-run fuse.py to colour the "
+                      f"cloud by camera")
+
         if len(ground) > args.max_points:
             pick = np.random.choice(len(ground), args.max_points, replace=False)
             ground, rgb = ground[pick], rgb[pick]
+            if src is not None:
+                src = src[pick]
 
-        traces.append(go.Scatter3d(
-            x=ground[:, 0], y=ground[:, 1], z=ground[:, 2],
-            mode="markers",
-            marker=dict(size=1.2,
-                        color=[f"rgb({int(r*255)},{int(g*255)},{int(b*255)})"
-                               for r, g, b in rgb],
-                        opacity=0.85),
-            name="point cloud", hoverinfo="skip",
-        ))
+        def cloud_trace(xyz, colours, name, visible=True, size=1.2):
+            # A per-point colour list is what makes these traces big -- roughly
+            # 18 characters a point. When every point shares a colour, pass the
+            # one string instead; that is what keeps the flat-coloured copies
+            # from doubling the page.
+            colour = (colours if isinstance(colours, str) else
+                      [f"rgb({int(r*255)},{int(g*255)},{int(b*255)})"
+                       for r, g, b in colours])
+            return go.Scatter3d(
+                x=xyz[:, 0], y=xyz[:, 1], z=xyz[:, 2], mode="markers",
+                marker=dict(size=size, color=colour, opacity=0.85),
+                name=name, hoverinfo="skip", visible=True if visible else "legendonly")
+
+        if src is None:
+            traces.append(cloud_trace(ground, rgb, "point cloud"))
+        else:
+            # True colour, split by camera so each can be switched off. A second
+            # flat-coloured copy of each camera, hidden until clicked, answers
+            # the question true colour cannot: which camera put that point there.
+            for c in sorted(np.unique(src)):
+                m = src == c
+                label = CAM_LABEL.get(str(c), f"cam{c}")
+                traces.append(cloud_trace(ground[m], rgb[m],
+                                          f"{label} cloud — {int(m.sum()):,} pts"))
+            # Schematic copies: one flat colour per camera, hidden until asked
+            # for. Thinned hard, because their job is to show where each camera
+            # put points, not to render the canopy.
+            thin = max(1, len(ground) // max(1, args.max_points // 3))
+            for c in sorted(np.unique(src)):
+                m = np.where(src == c)[0][::thin]
+                label = CAM_LABEL.get(str(c), f"cam{c}")
+                traces.append(cloud_trace(ground[m],
+                                          CAM_COLOR.get(str(c), BOX_COLOR),
+                                          f"{label} cloud, flat colour",
+                                          visible=False, size=1.6))
 
     # One mesh for every box, merged into a single trace so the legend toggle
     # turns all of them on and off at once.
