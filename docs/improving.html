@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Improving the Reconstruction — RCSA</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<nav>
+  <a href="index.html">Overview</a>
+  <a href="reconstruction.html">3D Reconstruction</a>
+  <a href="improving.html">Improving It</a>
+  <a href="vlm.html">VLM Baseline</a>
+</nav>
+
+<h1>Improving the Reconstruction</h1>
+
+<p>Everything below is addressed to the next capture, not to the code. The
+pipeline has been pushed about as far as this footage allows, and most of what
+limits it now was decided when the cameras were bolted on and the record button
+was pressed. The useful question is no longer "what else can the solver do" but
+"what should the rig look like next time".</p>
+
+<p>Each recommendation is tied to a number this project actually measured, so
+the cost of the current arrangement is visible rather than asserted.</p>
+
+<h2>What it costs to have no overlap</h2>
+
+<p>The three cameras share no field of view. Cam1 and cam2 point roughly
+opposite ways at ground level and cam3 looks straight down, so a cabbage seen
+from the side and the same cabbage seen from above have no common surface. That
+single fact is responsible for most of the pipeline's complexity and all of its
+remaining error.</p>
+
+<p>Because nothing can be triangulated between cameras, registration has to come
+from the robot's motion instead &mdash; the hand-eye problem, solved in
+<code>rig_solve.py</code>. It works, and the physical checks confirm it: the two
+ground cameras' recovered optical axes come out 175&deg; apart, which is to say
+the solver worked out they face opposite ways without ever being told the rig's
+layout. But it is weakly conditioned, and the weakness shows up exactly where it
+hurts:</p>
+
+<table>
+<tr><th>Quantity</th><th>Measured</th><th>What it means</th></tr>
+<tr><td>Registration residual</td><td>0.11&ndash;0.14</td><td>How far a ground camera's plants sit from the nadir camera's</td></tr>
+<tr><td>Plant spacing in the bed</td><td>0.09&ndash;0.12</td><td>Plants are closer together than the registration error</td></tr>
+<tr><td>Rotation conditioning <code>cond_t</code></td><td>0.09&ndash;0.12</td><td>Against a failure threshold of 0.04 &mdash; usable, not comfortable</td></tr>
+<tr><td>180&deg; branch flips</td><td>20% of resamples</td><td>cam2's rotation has a discrete ambiguity the motion cannot settle</td></tr>
+</table>
+
+<p>The first two rows are the whole story. The transform places a ground
+camera's view of a plant within about one plant's width of where the nadir
+camera puts it &mdash; but the plants are spaced closer than that, so matching a
+cam1 plant to a cam3 plant picks the neighbour about as often as the plant. Of
+190 plants in the fused field, only a handful are confidently seen by two
+cameras. The per-plant fusion that was the entire point of having three cameras
+does not survive its own error bars, and no amount of further solving fixes it,
+because the information was never captured.</p>
+
+<h2>1. Give the cameras overlapping views</h2>
+
+<p>This is the single highest-value change and it costs nothing but a bracket.
+Angle the two ground cameras forward and inward, perhaps 30&ndash;45&deg; off
+their current axes, so that each one's field of view clips the strip of bed the
+nadir camera is looking at. A shared strip only needs to be a fraction of each
+frame.</p>
+
+<p>With overlap, a plant seen from the side and from above becomes one
+observation of one object, and registration stops being an inference from motion
+and becomes a direct measurement. The residual that currently sits at
+0.11&ndash;0.14 would be set by feature-matching accuracy, which is
+pixel-scale &mdash; one to two orders of magnitude better, and comfortably below
+the plant spacing that currently blocks correspondence. The entire 838-line
+hand-eye solve becomes optional.</p>
+
+<p>Keeping one camera nadir is still right: it is the only view that sees the
+field <em>as a field</em>, and it is what makes the row structure legible. The
+change is to stop having the other two look away from it.</p>
+
+<h2>2. Add a stereo pair</h2>
+
+<p>Everything this pipeline produces is unitless. Monocular reconstruction fixes
+shape but not size, so each camera's scale is arbitrary and only the
+<em>ratio</em> between cameras is recoverable &mdash; and even that drifts,
+because monocular scale executes a slow random walk along the trajectory. The
+measured disagreement between hand-eye's scale and a direct trajectory fit was
+7% on cam1.</p>
+
+<p>A stereo pair with a known baseline fixes this at the source. Depth becomes
+metric per frame, with no drift to accumulate and no scale to solve for. Three
+specific problems disappear:</p>
+
+<ul>
+<li><strong>Unitless output.</strong> The <code>SCALE</code> constant in
+<code>lift_boxes.py</code> exists only because nothing in the footage records
+real size. Stereo makes plant dimensions millimetres directly.</li>
+<li><strong>The parked-camera trap.</strong> Motion-based depth needs motion. A
+stationary camera produces a reconstruction that looks <em>cleaner</em> than a
+moving one, because the network falls back on its monocular prior &mdash; it is
+not triangulated and cannot be stitched, which is why stationary stretches are
+currently discarded rather than used. Stereo works perfectly well parked.</li>
+<li><strong>Scale drift between cameras.</strong> Stops being a quantity that
+has to be estimated at all.</li>
+</ul>
+
+<p>For 640&times;480 sensors working at roughly half a metre to a metre from the
+canopy, a baseline around 8&ndash;12&nbsp;cm is the usual trade: wide enough for
+depth resolution at working distance, narrow enough that the two views still
+overlap heavily on a close, self-similar subject.</p>
+
+<h2>3. Trigger the cameras in hardware</h2>
+
+<p>The three clips were started by hand. The evidence is in the frame counts
+&mdash; cabbage is 4578 / 4571 / 4561, broccoli 4963 / 4962 / 4953 &mdash; with
+cam3 always shortest and cam1 always longest, which is what three webcams
+started and stopped by a person look like.</p>
+
+<p>Recovering that offset took an entire script. <code>clip_sync.py</code>
+correlates per-frame optical-flow magnitude across cameras that share no
+imagery, because the robot's stop-and-go burst pattern is the only signal
+common to all three. It works to about a frame, which is not good enough to fuse
+geometry on, so <code>rig_solve.py</code> then refines the offset as a continuous
+parameter. On the real pairs that refinement improved the fit by 0&ndash;1%: the
+offset is weakly identified, and the pipeline ends up trusting the correlation
+estimate anyway.</p>
+
+<p>A hardware trigger, or even a common timecode, deletes
+<code>clip_sync.py</code> outright and removes a free parameter from the rig
+solve. This is the cheapest item on the list by engineering effort and it
+removes a whole class of error.</p>
+
+<h2>4. Calibrate the rig once, with a target</h2>
+
+<p>Ten minutes with a checkerboard would replace a large fraction of this
+codebase. Intrinsics per camera and extrinsics between them, measured directly,
+would make redundant:</p>
+
+<ul>
+<li>the hand-eye solve in <code>rig_solve.py</code>, including its conditioning
+gates, its bootstrap branch-flip diagnostics, and its time-offset refinement;</li>
+<li>the soil-plane tilt correction in <code>fuse.py</code>, which exists only
+because hand-eye's two tilt components ride on a near-singular
+<code>(I&nbsp;&minus;&nbsp;R<sub>A</sub>)</code> at one degree of rotation and
+cannot be trusted;</li>
+<li>the trajectory-alignment scale fit, for the same reason.</li>
+</ul>
+
+<p>All three are inferences standing in for a measurement nobody took. They are
+reasonable inferences &mdash; the self-test recovers a known transform to 1.5&deg;
+and 0.4% on scale &mdash; but a calibration target beats them and never has a
+bad day.</p>
+
+<h2>5. Put a known length in the frame</h2>
+
+<p>Short of stereo, a single real measurement converts the whole model to real
+units: the nadir camera's height above the soil, or a fiducial of known size
+left in shot at the start of a run. One number, recorded once per capture, and
+every plant dimension becomes metric. This is the least effort for the most
+immediately useful change, since "how big is this cabbage" is the question the
+harvestability goal actually needs answered.</p>
+
+<h2>6. Drive at a constant speed</h2>
+
+<p>The robot moves in bursts, and it makes the footage much harder to use than
+it needs to be. Keyframes have to be chosen on measured drift rather than at
+fixed intervals, because some one-second gaps are pixel-identical and others
+change the frame almost completely. On cam3 the median gap between keyframes is
+0.134&nbsp;s against a mean of 0.49&nbsp;s &mdash; the spread that uneven spacing
+produces is what broke the rig solve's pose pairing until it was reworked to
+pair in time rather than by sample index.</p>
+
+<p>A steady crawl would make keyframe selection trivial, give every consecutive
+pair a comparable triangulation baseline, and remove the stationary stretches
+that have to be detected and dropped.</p>
+
+<h2>7. Resolution, shutter and lighting</h2>
+
+<p>640&times;480 is the floor for this kind of work, and a cabbage canopy is a
+self-similar repeated texture &mdash; the same problem the NSF snap-bean
+reconstruction work describes. More pixels on the plant directly improves both
+depth and detection. A global shutter matters because the camera is moving on a
+vibrating chassis; rolling-shutter skew is a systematic distortion that no
+amount of downstream solving can remove. Consistent lighting, or capture in
+overcast conditions, reduces the specular variation that makes matching across
+frames harder than it should be.</p>
+
+<h2>What is worth doing without new footage</h2>
+
+<p>Three things could still be improved in software on the existing clips,
+though none of them lift the ceiling the way overlap would:</p>
+
+<ul>
+<li><strong>Keep every track segment.</strong> When reconstruction breaks track
+it currently keeps only the largest segment and discards the rest. Hand-eye
+constraints are valid <em>within</em> a segment, so the discarded ones could
+still contribute to the rig solve even though they sit in unrelated coordinate
+frames. cam1's whole-clip run threw away everything outside a 52-second
+window.</li>
+<li><strong>Register on plants instead of pixels.</strong> The cameras share no
+matchable <em>texture</em>, but they do observe the same <em>objects</em>.
+Aligning cam1's detected plant positions to cam3's as a 2D point-set
+registration in the ground plane is a correspondence that does not need shared
+imagery. It is the most promising route to fixing cross-camera matching without
+touching the rig.</li>
+<li><strong>Per-camera confidence floors.</strong> The ground cameras produce
+most of the junk &mdash; the height trim removes 20.8% of cam2's points and
+11.4% of cam1's against 1.9% of cam3's. A stricter depth-confidence threshold
+for the ground cameras specifically would be more principled than trimming on
+height after the fact.</li>
+</ul>
+
+<h2>If only one thing changes</h2>
+
+<p>Angle the ground cameras so they overlap the nadir camera's view. It costs a
+bracket, it needs no new hardware, and it converts the hardest part of this
+problem from an inference into a measurement. Everything else on this page is an
+improvement; that one is a change of kind.</p>
+
+<p class="back"><a href="reconstruction.html">&#8592; Back to the reconstruction</a></p>
+
+</body>
+</html>
